@@ -1,0 +1,95 @@
+use Test;
+use lib 'lib', 'xt';
+use LiveKey;
+
+use OpenRouter::API::Client;
+use OpenRouter::API::Result::Credits;
+use OpenRouter::API::Result::Generation;
+use OpenRouter::API::Result::Model;
+
+# Live auth-required read endpoints. Credentials come from either
+# OPENROUTER_API_KEY env or the `.openrouter-api-key` file at the
+# module root (env wins). The /generation subtest additionally needs
+# OPENROUTER_GENERATION_ID set to any gen-XXXX id from a recent call
+# on the same account.
+#
+# Same approach as xt/01: check semantic invariants, not just
+# existence — a regression here flags either OR drift or a parser
+# bug, not transient downtime.
+
+my $key = resolve-api-key;
+unless $key.chars {
+    plan :skip-all<no inference key — set OPENROUTER_API_KEY or write .openrouter-api-key at the module root>;
+    exit 0;
+}
+
+plan 3;
+
+my $c = OpenRouter::API::Client.new(api-key => $key);
+
+subtest '/credits — balance is internally consistent' => {
+    plan 5;
+    my $cr = $c.get-credits;
+    isa-ok $cr, OpenRouter::API::Result::Credits, 'Credits typed';
+    isa-ok $cr.total-credits, Numeric,            'total-credits is Numeric';
+    isa-ok $cr.total-usage,   Numeric,            'total-usage is Numeric';
+
+    cmp-ok $cr.total-credits, '>=', 0, 'total-credits non-negative';
+    cmp-ok $cr.total-usage,   '>=', 0, 'total-usage non-negative';
+    # We don't assert total >= usage strictly — OR has been observed
+    # to let usage briefly exceed purchased credits during settlement,
+    # and `.remaining` clamps to zero anyway. Just sanity on signs.
+};
+
+subtest '/models/user — non-empty subset of /models' => {
+    plan 4;
+    my @user = $c.get-user-models;
+    cmp-ok @user.elems, '>=', 1,                       'at least one model in user view';
+    isa-ok @user.head, OpenRouter::API::Result::Model, 'typed entries';
+
+    my @bad-id = @user.grep({ !($_.id ~~ /^ <-[/]>+ '/' <-[/]>+ $/) });
+    is @bad-id.elems, 0,
+        "every user model id matches author/slug shape (offenders: {@bad-id.map(*.id).join(', ')})";
+
+    # Subset check: every id in /models/user must appear in /models.
+    # If OR ever returns user-only model variants not in the catalogue,
+    # this will catch it — and we'll need to revisit the assumption.
+    my %catalogue-ids = $c.get-models.map(*.id).Set;
+    my @orphans = @user.grep({ !%catalogue-ids{$_.id} });
+    is @orphans.elems, 0,
+        "every /models/user id appears in /models (orphans: {@orphans.map(*.id).join(', ')})";
+};
+
+# `:skip-all` only works inside a Sub-bodied subtest, not a bare
+# Block. Use the `sub { ... }` form so the conditional skip is
+# legal when OPENROUTER_GENERATION_ID isn't set.
+subtest '/generation — metadata sanity (requires OPENROUTER_GENERATION_ID)', sub {
+    my $gen-id = %*ENV<OPENROUTER_GENERATION_ID>;
+    unless $gen-id {
+        plan :skip-all<Set OPENROUTER_GENERATION_ID to any recent gen-XXXX id to run>;
+        return;
+    }
+    plan 7;
+    my $g = $c.get-generation($gen-id);
+    isa-ok $g, OpenRouter::API::Result::Generation, 'Generation typed';
+    is $g.id, $gen-id,                              'id round-trips';
+    ok $g.model.chars > 0,                          'model routed to something';
+    ok $g.model ~~ /^ <-[/]>+ '/' <-[/]>+ $/,       'model id matches author/slug shape';
+
+    # Finish reasons OR has been observed to emit. Adjust if a new
+    # one starts appearing — and treat that as a wire-shape change
+    # worth knowing about.
+    my @known = <stop length tool_calls content_filter end_turn error>;
+    ok ($g.finish-reason // '') eq any(@known) | '',
+        "finish-reason in known set ({$g.finish-reason})";
+
+    # Either prompt or completion tokens should be > 0 — a
+    # generation with literally zero tokens on both sides shouldn't
+    # have a /generation record. Accept native_* as a fallback for
+    # providers that report only those.
+    my $any-tokens = $g.tokens-prompt + $g.tokens-completion
+                  + $g.native-tokens-prompt + $g.native-tokens-completion;
+    cmp-ok $any-tokens, '>', 0, 'at least one token metric is non-zero';
+
+    cmp-ok $g.total-cost, '>=', 0, 'total-cost is non-negative (free / BYOK can be 0)';
+};

@@ -1,0 +1,20 @@
+{
+  "data": {
+    "input": {
+      "messages": [
+        {
+          "role": "system",
+          "content": "You are a careful technical writer."
+        },
+        {
+          "role": "user",
+          "content": "Explain what a Raku role is in two sentences."
+        }
+      ]
+    },
+    "output": {
+      "completion": "A Raku role is a reusable bundle of attributes and methods that classes compose via `does` — like an interface with a default implementation baked in. Unlike inheritance, roles are flat: they're mixed into classes at composition time, so a class can consume many roles without a diamond hierarchy.",
+      "reasoning": null
+    }
+  }
+}

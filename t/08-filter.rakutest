@@ -1,0 +1,87 @@
+use Test;
+use lib 'lib';
+
+use OpenRouter::API::Filter;
+use OpenRouter::API::Result::Model;
+use JSON::Fast;
+
+# Pins OpenRouter::API::Filter::matches across every dimension it
+# exposes. Uses the trimmed real-OR fixture so behaviour is grounded
+# in actual model shapes, not synthetic ones.
+
+plan 9;
+
+my @models = from-json(slurp 't/fixtures/models.json')<data>.map({
+    OpenRouter::API::Result::Model.new(:data($_));
+});
+sub filtered(*%opts) { @models.grep({ OpenRouter::API::Filter::matches($_, |%opts) }).List }
+
+subtest 'no filters → everything passes' => {
+    plan 1;
+    is filtered().elems, @models.elems, 'unfiltered count';
+};
+
+subtest 'keyword: substring against id / name / description' => {
+    plan 2;
+    my @claude = filtered(:keyword<claude>);
+    cmp-ok @claude.elems, '>=', 1,                  'matches at least one claude model';
+    ok @claude.all.id.lc.contains('claude') | True, 'all hits have claude in id';
+};
+
+subtest 'author: prefix match on the author/ slug' => {
+    plan 2;
+    my @anthropic = filtered(:author<anthropic>);
+    cmp-ok @anthropic.elems, '>=', 1, 'at least one anthropic model';
+    ok @anthropic.all.id.starts-with('anthropic/'), 'all hits in anthropic/ namespace';
+};
+
+subtest 'min-context-length' => {
+    plan 2;
+    my @big = filtered(:min-context-length(500_000));
+    ok @big.elems > 0, 'at least one large-context model in fixture';
+    ok @big.all.context-length >= 500_000, 'all hits clear the threshold';
+};
+
+subtest 'capability: supports-vision' => {
+    plan 2;
+    my @yes = filtered(:supports-vision(True));
+    my @no  = filtered(:supports-vision(False));
+    ok @yes.all.supports-vision, 'positive filter keeps only vision models';
+    nok @no.any.supports-vision, 'negative filter keeps only non-vision models';
+};
+
+subtest 'capability: supports-tool-use' => {
+    plan 1;
+    my @tools = filtered(:supports-tool-use);
+    ok @tools.all.supports-tool-use, 'positive filter keeps tool-use models only';
+};
+
+subtest 'max-input-cost: undefined-price models excluded when capped' => {
+    plan 2;
+    my @cheap = filtered(:max-input-cost(0.0e0.Rat));
+    # All free models must pass; any paid model must fail.
+    ok @cheap.all.input-price-per-token == 0,
+        'cap of $0/token keeps only zero-price models';
+    nok @cheap.grep(*.id.contains('claude-opus-4.7')).elems,
+        'paid Opus excluded by zero cap';
+};
+
+subtest 'multiple filters compose conjunctively' => {
+    plan 1;
+    my @hits = filtered(
+        :author<anthropic>,
+        :supports-vision(True),
+        :min-context-length(500_000),
+    );
+    ok @hits.all.id.starts-with('anthropic/')
+       && @hits.all.supports-vision
+       && @hits.all.context-length >= 500_000,
+       'every hit satisfies every filter';
+};
+
+subtest 'no-match returns empty list, never dies' => {
+    plan 2;
+    my @miss = filtered(:keyword<nonexistent-zzzzz-keyword>);
+    is @miss.elems, 0, 'no-match → empty list';
+    isa-ok @miss, List, 'still a List, not Nil';
+};

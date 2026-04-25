@@ -1,0 +1,57 @@
+use Test;
+use lib 'lib';
+
+use OpenRouter::API::Result::Generation;
+use JSON::Fast;
+
+plan 4;
+
+my %meta    = from-json(slurp 't/fixtures/generation.json')<data>;
+my %content = from-json(slurp 't/fixtures/generation-content.json')<data>;
+
+subtest 'metadata-only construction' => {
+    plan 8;
+    my $g = OpenRouter::API::Result::Generation.new(:data(%meta));
+    is $g.id,             'gen-3bhGkxlo4XFrqiabUM7NDtwDzWwG', 'id';
+    is $g.model,          'anthropic/claude-opus-4.7',         'model';
+    is $g.provider-name,  'Anthropic',                         'provider-name';
+    is $g.finish-reason,  'stop',                              'finish-reason';
+    is $g.streamed,       True,                                'streamed';
+    is $g.tokens-prompt,  1240,                                'tokens-prompt';
+    is-approx $g.total-cost, 0.01845, 1e-6,                    'total-cost';
+    nok $g.has-content,                                        'no content fetched yet';
+};
+
+subtest 'cost-per-token helper' => {
+    plan 2;
+    my $g = OpenRouter::API::Result::Generation.new(:data(%meta));
+    my $expected = 0.01845e0 / (1240 + 380);
+    is-approx $g.cost-per-token.Num, $expected, 1e-9,
+        'cost-per-token = total-cost / (prompt + completion)';
+
+    my $zero = OpenRouter::API::Result::Generation.new(
+        data => %( total_cost => 0.5 ),
+    );
+    is $zero.cost-per-token, 0, 'zero-token generation → 0 (no divide-by-zero)';
+};
+
+subtest 'content-fetched construction' => {
+    plan 5;
+    my $g = OpenRouter::API::Result::Generation.new(
+        :data(%meta), :content(%content),
+    );
+    ok $g.has-content,                                         'has-content True';
+    is $g.prompt-messages.elems, 2,                            'two prompt messages';
+    ok $g.prompt-text.contains('Raku role'),                   'prompt-text joins messages';
+    ok $g.completion-text.contains('reusable bundle'),         'completion-text populated';
+    is $g.reasoning-text, '',                                  'reasoning-text empty when null on wire';
+};
+
+subtest 'raw escape hatches' => {
+    plan 2;
+    my $g = OpenRouter::API::Result::Generation.new(
+        :data(%meta), :content(%content),
+    );
+    ok $g.raw ~~ Hash,         '.raw returns Hash';
+    ok $g.raw-content ~~ Hash, '.raw-content returns Hash';
+};

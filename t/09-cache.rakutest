@@ -1,0 +1,67 @@
+use Test;
+use lib 'lib';
+
+use OpenRouter::API::Client;
+use OpenRouter::API::Result::Model;
+use JSON::Fast;
+
+# Cache behaviour. Uses a test subclass that overrides _request to
+# serve from a fixture + count invocations — no network, no flake.
+
+plan 4;
+
+my %fixture-body = from-json(slurp 't/fixtures/models.json');
+
+class StubClient is OpenRouter::API::Client {
+    has Int $.request-count is rw = 0;
+    method _request(Str:D :$path!, :%query) {
+        $!request-count++;
+        return %fixture-body;
+    }
+}
+
+subtest 'cache hits avoid re-request within TTL' => {
+    plan 3;
+    my $c = StubClient.new(api-key => 'test');
+    $c.get-models;
+    $c.get-models;
+    $c.get-models;
+    is $c.request-count, 1, 'three calls → one network request';
+    $c.clear-cache;
+    $c.get-models;
+    is $c.request-count, 2, 'after clear-cache, next call re-fetches';
+    # Different query params → separate cache slot.
+    $c.get-models(output-modalities => 'text');
+    is $c.request-count, 3, 'differently-filtered call is a fresh fetch';
+};
+
+subtest ':cache(False) per-call bypass' => {
+    plan 2;
+    my $c = StubClient.new(api-key => 'test');
+    $c.get-models;   # warms cache
+    $c.get-models(:cache(False));
+    is $c.request-count, 2, ':cache(False) forces round-trip';
+    $c.get-models;   # cached again
+    is $c.request-count, 2, 'subsequent cached call stays at 2';
+};
+
+subtest 'cache off on the Client entirely' => {
+    plan 1;
+    my $c = StubClient.new(:cache(False), :api-key<test>);
+    $c.get-models for ^5;
+    is $c.request-count, 5, '$.cache(False) disables caching everywhere';
+};
+
+subtest 'TTL expiry' => {
+    plan 2;
+    # 0.1s TTL so we can wait through it cheaply.
+    my $c = StubClient.new(
+        :api-key<test>, :cache-ttl(Duration.new(0.1)),
+    );
+    $c.get-models;
+    $c.get-models;
+    is $c.request-count, 1, 'two back-to-back calls hit cache';
+    sleep 0.2;
+    $c.get-models;
+    is $c.request-count, 2, 'call after TTL expiry re-fetches';
+};

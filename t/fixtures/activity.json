@@ -1,0 +1,56 @@
+{
+  "data": [
+    {
+      "date": "2026-04-22",
+      "endpoint_id": "anthropic/claude-opus-4.7|anthropic",
+      "model": "anthropic/claude-opus-4.7",
+      "model_permaslug": "anthropic/claude-opus-4.7-2026-04-16",
+      "provider_name": "Anthropic",
+      "requests": 42,
+      "prompt_tokens": 125000,
+      "completion_tokens": 18400,
+      "reasoning_tokens": 6200,
+      "usage": 3.8125,
+      "byok_usage_inference": 0
+    },
+    {
+      "date": "2026-04-22",
+      "endpoint_id": "openai/gpt-5.4|openai",
+      "model": "openai/gpt-5.4",
+      "model_permaslug": "openai/gpt-5.4-2026-02-01",
+      "provider_name": "OpenAI",
+      "requests": 18,
+      "prompt_tokens": 46000,
+      "completion_tokens": 9800,
+      "reasoning_tokens": 0,
+      "usage": 1.2035,
+      "byok_usage_inference": 0
+    },
+    {
+      "date": "2026-04-23",
+      "endpoint_id": "deepseek/deepseek-v3.2|deepinfra",
+      "model": "deepseek/deepseek-v3.2",
+      "model_permaslug": "deepseek/deepseek-v3.2-2026-03-15",
+      "provider_name": "DeepInfra",
+      "requests": 7,
+      "prompt_tokens": 21000,
+      "completion_tokens": 3400,
+      "reasoning_tokens": 1200,
+      "usage": 0.0872,
+      "byok_usage_inference": 0
+    },
+    {
+      "date": "2026-04-23",
+      "endpoint_id": "z-ai/glm-5.1|zai",
+      "model": "z-ai/glm-5.1",
+      "model_permaslug": "z-ai/glm-5.1-2026-03-20",
+      "provider_name": "Z.AI",
+      "requests": 55,
+      "prompt_tokens": 165000,
+      "completion_tokens": 28400,
+      "reasoning_tokens": 0,
+      "usage": 0.7125,
+      "byok_usage_inference": 0
+    }
+  ]
+}

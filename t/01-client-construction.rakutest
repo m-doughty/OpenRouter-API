@@ -1,0 +1,95 @@
+use Test;
+use lib 'lib';
+
+use OpenRouter::API::Client;
+
+# Pins construction semantics + the few non-endpoint behaviours on
+# Client: env-var fallback for the API key, clear-cache, the
+# missing-key error message wording for auth-required methods, and
+# defaults (base-url, cache flag / TTL).
+
+plan 6;
+
+# Helper: deletes OPENROUTER_API_KEY for the duration of the enclosing
+# block (subtest), restoring it on scope exit. Needed because every
+# client construction reads %*ENV in TWEAK.
+sub without-env(&block) {
+    my $save = %*ENV<OPENROUTER_API_KEY>:delete;
+    LEAVE { %*ENV<OPENROUTER_API_KEY> = $save with $save }
+    block();
+}
+
+sub with-env($value, &block) {
+    my $save = %*ENV<OPENROUTER_API_KEY>:delete;
+    %*ENV<OPENROUTER_API_KEY> = $value;
+    LEAVE {
+        %*ENV<OPENROUTER_API_KEY>:delete;
+        %*ENV<OPENROUTER_API_KEY> = $save with $save;
+    }
+    block();
+}
+
+subtest 'defaults' => {
+    plan 5;
+    without-env {
+        my $c = OpenRouter::API::Client.new;
+        is $c.base-url,  'https://openrouter.ai/api/v1', 'default base-url';
+        is $c.cache,     True,                            'cache default on';
+        ok $c.cache-ttl.Numeric == 300,                   'cache-ttl default 5 min';
+        nok $c.api-key.defined,                           'api-key undefined without env';
+        nok $c.http-referer.defined,                      'http-referer undefined by default';
+    };
+};
+
+subtest 'explicit api-key wins when no env' => {
+    plan 1;
+    without-env {
+        my $c = OpenRouter::API::Client.new(api-key => 'sk-explicit');
+        is $c.api-key, 'sk-explicit', 'explicit :api-key assigns';
+    };
+};
+
+subtest 'env-var fallback' => {
+    plan 1;
+    with-env 'sk-from-env', {
+        my $c = OpenRouter::API::Client.new;
+        is $c.api-key, 'sk-from-env', 'OPENROUTER_API_KEY picked up via TWEAK';
+    };
+};
+
+subtest 'explicit beats env-var' => {
+    plan 1;
+    with-env 'sk-from-env', {
+        my $c = OpenRouter::API::Client.new(api-key => 'sk-explicit');
+        is $c.api-key, 'sk-explicit', 'explicit :api-key trumps env';
+    };
+};
+
+subtest 'clear-cache is safe on empty state' => {
+    plan 1;
+    without-env {
+        my $c = OpenRouter::API::Client.new;
+        lives-ok { $c.clear-cache }, 'clear-cache on fresh client is a no-op';
+    };
+};
+
+subtest 'auth-required methods die with helpful message when no key' => {
+    plan 5;
+    without-env {
+        my $c = OpenRouter::API::Client.new;
+        for <get-credits get-user-models get-activity> -> $m {
+            throws-like { $c."$m"() },
+                Exception,
+                message => /'OpenRouter::API'/ & /$m/ & /'OPENROUTER_API_KEY'/,
+                "$m dies with helpful message";
+        }
+        throws-like { $c.get-generation('gen-x') },
+            Exception,
+            message => /'get-generation'/ & /'OPENROUTER_API_KEY'/,
+            'get-generation(Str) dies with helpful message';
+        throws-like { $c.get-generation-content('gen-x') },
+            Exception,
+            message => /'get-generation-content'/ & /'OPENROUTER_API_KEY'/,
+            'get-generation-content(Str) dies with helpful message';
+    };
+};

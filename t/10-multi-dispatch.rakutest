@@ -1,0 +1,75 @@
+use Test;
+use lib 'lib';
+
+use OpenRouter::API::Client;
+use OpenRouter::API::Result::Generation;
+use JSON::Fast;
+
+# Pins the multi-dispatch on get-generation / get-generation-content.
+# The Str-id signature hits the real endpoint; the duck-typed
+# `$r where .can('generation-id')` signature accepts any object that
+# exposes .generation-id — explicitly including LLM::Chat's
+# Response::OpenRouter (but without a `use LLM::Chat` here — that's
+# the point of the duck type).
+
+plan 4;
+
+my %gen-meta    = from-json(slurp 't/fixtures/generation.json');
+my %gen-content = from-json(slurp 't/fixtures/generation-content.json');
+
+# Stub client so we don't hit the network.
+class StubClient is OpenRouter::API::Client {
+    has Str @.paths;
+    has Str @.ids;
+    method _request(Str:D :$path!, :%query) {
+        @!paths.push: $path;
+        @!ids.push:   %query<id> // '';
+        return $path eq '/generation' ?? %gen-meta !! %gen-content;
+    }
+}
+
+# Anything that .can('generation-id') should work — no OR::Response
+# import here. Stand-in for LLM::Chat::Backend::Response::OpenRouter.
+class FakeResp {
+    has Str $.generation-id;
+}
+
+subtest 'get-generation(Str) hits /generation once' => {
+    plan 4;
+    my $c = StubClient.new(:api-key<test>);
+    my $g = $c.get-generation('gen-abc123');
+    is $c.paths.elems, 1,                                 'one network call';
+    is $c.paths[0], '/generation',                        'path is /generation';
+    is $c.ids[0],   'gen-abc123',                         'id passed through';
+    isa-ok $g, OpenRouter::API::Result::Generation,       'returns Generation';
+};
+
+subtest 'get-generation(duck) pulls gen-id off .generation-id' => {
+    plan 3;
+    my $c    = StubClient.new(:api-key<test>);
+    my $resp = FakeResp.new(generation-id => 'gen-duck-typed');
+    my $g    = $c.get-generation($resp);
+    is $c.paths.elems, 1,                                 'single call';
+    is $c.ids[0],  'gen-duck-typed',                      'gen-id lifted off .generation-id';
+    ok $g.has-content.not,                                'content not fetched on the lightweight overload';
+};
+
+subtest 'get-generation-content(Str) fires BOTH endpoints' => {
+    plan 4;
+    my $c = StubClient.new(:api-key<test>);
+    my $g = $c.get-generation-content('gen-abc123');
+    is $c.paths.elems, 2,                                     'two network calls';
+    is-deeply $c.paths.List, ('/generation', '/generation/content').List,
+        'fires /generation THEN /generation/content';
+    ok $g.has-content,                                        'content populated';
+    ok $g.prompt-text.contains('Raku role'),                  'prompt-text present';
+};
+
+subtest 'get-generation-content(duck) works the same way' => {
+    plan 2;
+    my $c    = StubClient.new(:api-key<test>);
+    my $resp = FakeResp.new(generation-id => 'gen-duck-full');
+    my $g    = $c.get-generation-content($resp);
+    is $c.ids.List, ('gen-duck-full', 'gen-duck-full').List, 'same gen-id sent to both paths';
+    ok $g.has-content,                                       'content still populated';
+};

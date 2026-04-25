@@ -1,0 +1,135 @@
+use Test;
+use lib 'lib', 'xt';
+
+use OpenRouter::API::Client;
+use OpenRouter::API::Result::Endpoint;
+use OpenRouter::API::Result::Model;
+use OpenRouter::API::Result::Provider;
+
+# Live coverage of every endpoint that works without credentials.
+# The assertions go beyond "non-empty" — they pin invariants the
+# wire shape has actually held across observed responses, so a
+# regression here flags either OR drift or a parser bug, not just
+# transient downtime. No env-var gate; xt/ is by convention opt-in.
+
+plan 5;
+
+my $c = OpenRouter::API::Client.new;
+
+# Pre-fetch the catalogue once; many subtests cross-reference it.
+my @models    = $c.get-models;
+my @providers = $c.get-providers;
+
+#|( OR uses C<-1> as a sentinel for "indeterminate price" on its
+    routing models (openrouter/auto, openrouter/bodybuilder,
+    openrouter/pareto-code) — the actual price depends on which
+    underlying model gets routed to. Treated as legitimate, not as
+    a parser bug. )
+sub price-ok($m, $p --> Bool) {
+    return True unless $p.defined;
+    return True if $p >= 0;
+    return $m.id.starts-with('openrouter/');   # router-model sentinel
+}
+
+subtest '/models — catalogue invariants' => {
+    plan 8;
+    cmp-ok @models.elems, '>', 50,                  'realistic model count';
+    isa-ok @models.head, OpenRouter::API::Result::Model, 'typed entries';
+
+    my @bad-id = @models.grep({ !($_.id ~~ /^ <-[/]>+ '/' <-[/]>+ $/) });
+    is @bad-id.elems, 0, "every id matches author/slug shape (offenders: {@bad-id.map(*.id).join(', ')})";
+
+    my @bad-ctx = @models.grep(*.context-length <= 0);
+    is @bad-ctx.elems, 0, "every model has positive context-length (offenders: {@bad-ctx.map(*.id).join(', ')})";
+
+    my @missing-price = @models.grep({ !$_.input-price-per-token.defined });
+    is @missing-price.elems, 0,
+        "every model has a parsed input-price (offenders: {@missing-price.map(*.id).join(', ')})";
+
+    my @bad-price = @models.grep({
+        !price-ok($_, $_.input-price-per-token) || !price-ok($_, $_.output-price-per-token)
+    });
+    is @bad-price.elems, 0,
+        "no negative prices outside the openrouter/* router family (offenders: {@bad-price.map(*.id).join(', ')})";
+
+    my %known-modalities = <audio file image text video>.Set;
+    my @unknown = @models.map(*.input-modalities.Slip).unique.grep({ ! %known-modalities{$_} });
+    is @unknown.elems, 0,
+        "input-modalities are a subset of the known set (unknown: {@unknown.join(', ')})";
+
+    # Sanity: prose models really do dominate.
+    my @text-input = @models.grep({ 'text' (elem) $_.input-modalities });
+    cmp-ok @text-input.elems / @models.elems, '>', 0.9, 'most models accept text input';
+};
+
+subtest '/models/count — agrees with /models length' => {
+    plan 4;
+    my $n = $c.count-models;
+    isa-ok $n, Int,                                 'Int return';
+    cmp-ok $n, '>', 50,                             'realistic count';
+    is $n, @models.elems,
+        '/models/count == /models.elems (server-side consistency)';
+
+    # Filter consistency: at least one output-modality filter narrows
+    # consistently across both endpoints. Pick "image" — small enough
+    # subset to make the agreement non-trivial.
+    my $img-count = $c.count-models(:output-modalities<image>);
+    my $img-list  = $c.get-models(:output-modalities<image>).elems;
+    is $img-count, $img-list,
+        ":output-modalities<image> filter agrees between count and list";
+};
+
+subtest '/providers — populated with URL-safe slugs' => {
+    plan 4;
+    cmp-ok @providers.elems, '>=', 10,              'at least 10 providers';
+    isa-ok @providers.head, OpenRouter::API::Result::Provider, 'typed entries';
+
+    my @bad-slug = @providers.grep({ !($_.slug ~~ /^ <[a..z 0..9 \- _]>+ $/) });
+    is @bad-slug.elems, 0,
+        "every provider slug is URL-safe (offenders: {@bad-slug.map(*.slug).join(', ')})";
+
+    my @no-name = @providers.grep({ !($_.name.defined && $_.name.chars) });
+    is @no-name.elems, 0,
+        "every provider has a non-empty name (offenders: {@no-name.elems})";
+};
+
+subtest '/endpoints/zdr — every endpoint typed + complete' => {
+    plan 4;
+    my @zdr = $c.get-zdr-endpoints;
+    cmp-ok @zdr.elems, '>=', 1,                     'at least one ZDR endpoint';
+    isa-ok @zdr.head, OpenRouter::API::Result::Endpoint, 'typed entries';
+
+    my @bad-id = @zdr.grep({ !($_.model-id.defined && $_.model-id.chars) });
+    is @bad-id.elems, 0, 'every ZDR endpoint has a non-empty model-id';
+
+    my @bad-prov = @zdr.grep({ !($_.provider-name.defined && $_.provider-name.chars) });
+    is @bad-prov.elems, 0, 'every ZDR endpoint has a non-empty provider-name';
+};
+
+subtest '/models/{author}/{slug}/endpoints — pick a live target + cross-check' => {
+    plan 5;
+    # Target the first non-free, non-router model from the live
+    # catalogue — gives a stable shape that's almost certain to have
+    # at least one serving provider. Picking dynamically rather than
+    # hard-coding a model id, since OR retires models periodically.
+    my $target = @models.first({
+        !$_.is-free && !$_.id.starts-with('openrouter/') && $_.id.split('/').elems == 2
+    });
+    ok $target.defined, 'at least one paid non-router model found';
+
+    my ($author, $slug) = $target.id.split('/', 2);
+    my @eps = $c.get-model-endpoints($author, $slug);
+    cmp-ok @eps.elems, '>=', 1, "{$target.id} has at least one endpoint";
+    isa-ok @eps.head, OpenRouter::API::Result::Endpoint, 'typed entries';
+
+    my @bad-prov = @eps.grep({ !($_.provider-name.defined && $_.provider-name.chars) });
+    is @bad-prov.elems, 0, 'every endpoint has a non-empty provider-name';
+
+    # Per-endpoint context-length should be sane and at least one
+    # endpoint should match the catalogue's advertised max — if every
+    # endpoint were below it, the catalogue figure would be
+    # misleading.
+    my $catalogue-ctx = $target.context-length;
+    cmp-ok @eps.map(*.context-length).max, '>=', $catalogue-ctx,
+        "at least one endpoint serves the catalogue context-length ($catalogue-ctx)";
+};

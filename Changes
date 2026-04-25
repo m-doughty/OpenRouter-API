@@ -1,0 +1,21 @@
+Revision history for OpenRouter::API
+
+{{$NEXT}}
+
+0.1.0  2026-04-25T02:59:02+01:00
+    - Initial release
+    - Read-only wrapper over OpenRouter's non-inference REST surface:
+      model catalogue, per-model endpoint listings, providers, credits,
+      daily activity / spending log, per-generation cost lookups, and
+      ZDR-filtered endpoints.
+    - Typed Result classes (Model, Endpoint, Provider, Credits,
+      ActivityRow, Generation) with derived helpers (cheapest-endpoint,
+      cost-per-1k-tokens, etc.) and .raw hash escape hatch.
+    - Client-side search-models with keyword / cost / context-length /
+      capability filters. 5-minute TTL catalogue cache, opt-out via
+      :cache(False), explicit clear-cache.
+    - Duck-typed get-generation multi accepts either a Str gen-id or a
+      LLM::Chat::Backend::Response::OpenRouter — no hard dep on
+      LLM::Chat (module stays Tier 0).
+    - HTTP-Referer / X-Title attribution headers forwarded on every
+      call when configured.

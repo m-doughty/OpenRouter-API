@@ -1,0 +1,155 @@
+=begin pod
+
+=head1 NAME
+
+OpenRouter::API - Raku client for OpenRouter's non-inference REST API
+
+=head1 SYNOPSIS
+
+=begin code :lang<raku>
+
+use OpenRouter::API;
+
+# Reads OPENROUTER_API_KEY from the environment by default.
+my $or = OpenRouter::API::Client.new;
+
+# ----- model catalogue ---------------------------------------------
+
+my @models = $or.get-models;
+say @models.elems, " models available";
+
+# search-models filters the cached catalogue entirely client-side
+# (OpenRouter has no server-side keyword search).
+my @candidates = $or.search-models(
+    :keyword<claude>,
+    :supports-tool-use,
+    :min-context-length(200_000),
+);
+
+# Drill into a single model's per-provider endpoints — pricing,
+# throughput, context, ZDR:
+my @endpoints = $or.get-model-endpoints('anthropic', 'claude-opus-4-7');
+say "cheapest: ", @endpoints.sort(*.price-per-input-token).head.provider-name;
+
+# ----- spending ----------------------------------------------------
+
+# Current credit balance.
+say $or.get-credits.remaining, " USD left";
+
+# Daily activity. REQUIRES A MANAGEMENT KEY (the regular inference
+# key returns 401 here). Get one from
+# https://openrouter.ai/settings/keys.
+my @rows = $or.get-activity;
+say @rows.elems, " activity rows over the last 30 days";
+
+# Narrow by date / key / user:
+my @today = $or.get-activity(:date<2026-04-24>);
+
+# ----- per-call cost lookup ----------------------------------------
+
+# Pass a Str gen-id...
+my $gen = $or.get-generation('gen-abc123');
+
+# ...or duck-type from any object with a .generation-id accessor —
+# e.g. LLM::Chat::Backend::Response::OpenRouter, which exposes the
+# gen-id directly on the Response.
+use LLM::Chat::Backend::OpenRouter;
+my $llm  = LLM::Chat::Backend::OpenRouter.new(
+    api_key => %*ENV<OPENROUTER_API_KEY>,
+    model   => 'anthropic/claude-opus-4-7',
+);
+my $resp = $llm.chat-completion(@messages);
+# ...drain the supply...
+my $details = $or.get-generation($resp);   # takes the Response directly
+
+# /generation/content returns the stored prompt + completion text
+# on top of the cost metadata — only populated when request logging
+# is enabled on the OpenRouter account.
+my $with-text = $or.get-generation-content($resp);
+say $with-text.prompt-text;
+say $with-text.completion-text;
+
+=end code
+
+=head1 DESCRIPTION
+
+OpenRouter::API wraps OpenRouter's REST surface for everything that
+isn't inference. Use it when you want to:
+
+=item Browse the model catalogue (C<get-models>, C<search-models>,
+      C<count-models>, C<get-user-models>).
+=item Inspect which providers will actually serve a given model and
+      at what price (C<get-model-endpoints>, C<get-providers>,
+      C<get-zdr-endpoints>).
+=item Track spend: current balance (C<get-credits>), daily rollups
+      (C<get-activity>), or individual call metadata
+      (C<get-generation> / C<get-generation-content>).
+
+Inference itself — C<POST /chat/completions> — is deliberately out
+of scope. See L<LLM::Chat::Backend::OpenRouter> for that.
+
+=head2 Conventions
+
+=head3 Auth
+
+Pass C<:api-key> to the constructor, or set C<OPENROUTER_API_KEY> in
+the environment. Endpoints that require an API key die with a
+helpful message if none is configured. Endpoints that work
+unauthenticated (C</models>, C</models/count>, C</providers>,
+C</endpoints/zdr>) run without a key.
+
+=head3 Management vs inference keys
+
+C</activity> uses a different key scope than the rest. OpenRouter
+issues I<management> keys for account-level introspection
+endpoints; your usual inference key will come back 401/403 there.
+The wrapper normalises the error and points you at the settings
+page.
+
+=head3 Result types
+
+Each endpoint returns a typed object with named accessors and
+derived helpers. When OpenRouter adds fields we haven't typed,
+C<.raw> gives you the wire hash. Examples of the derived helpers:
+
+=item C<Model.cheapest-endpoint> — scans per-provider endpoints and
+      returns the one with the lowest input-token price.
+=item C<Model.supports-tool-use>, C<Model.supports-vision> — capability
+      checks against the C<supported_parameters> / C<output_modalities>
+      wire fields.
+=item C<ActivityRow.cost-per-1k-tokens> — derived from C<.cost> /
+      (C<.prompt-tokens> + C<.completion-tokens>).
+
+=head3 Caching
+
+C<search-models> routes through a 5-minute TTL cache on the full
+C</models> response. Filter calls against it are free after the
+first fetch. Disable with C<:cache(False)> on the Client, or call
+C<.clear-cache> to invalidate. Other endpoints are not cached —
+C</credits> and C</activity> need to be live every time.
+
+=head3 Attribution
+
+Pass C<:http-referer> / C<:x-title> to the Client to forward
+OpenRouter's attribution headers on every call. These show up on
+the OpenRouter rankings page and in users' generation logs. Both
+are optional.
+
+=head1 SEE ALSO
+
+=item L<https://openrouter.ai/docs/api-reference/overview> - upstream API docs.
+=item L<https://openrouter.ai/openapi.json> - OpenAPI spec (the source of truth for wire shapes).
+=item L<LLM::Chat::Backend::OpenRouter> - the inference-side OR backend in this monorepo.
+
+=head1 AUTHOR
+
+Matt Doughty
+
+=head1 COPYRIGHT AND LICENSE
+
+Copyright 2026 Matt Doughty
+
+This library is free software; you can redistribute it and/or modify
+it under the Artistic License 2.0.
+
+=end pod

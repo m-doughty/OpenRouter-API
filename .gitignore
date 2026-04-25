@@ -1,0 +1,23 @@
+.precomp
+lib/.precomp
+.DS_Store
+._*
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.bak
+*.tmp
+*.old
+*.log
+core
+*.core
+OpenRouter-API-*
+
+# Live-test credentials. xt/ tests read these when present; never
+# committed. Keep the keys out of env-wide shell history too —
+# writing them to a file scoped to this module is safer than
+# exporting OPENROUTER_API_KEY globally.
+.openrouter-api-key
+.openrouter-management-key

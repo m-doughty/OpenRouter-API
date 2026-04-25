@@ -1,0 +1,32 @@
+use Test;
+use lib 'lib';
+
+use OpenRouter::API::Result::Provider;
+use JSON::Fast;
+
+plan 3;
+
+my @raw = from-json(slurp 't/fixtures/providers.json')<data>.list;
+my @ps  = @raw.map({ OpenRouter::API::Result::Provider.new(:data($_)) });
+
+subtest 'fixture parses' => {
+    plan 2;
+    cmp-ok @ps.elems, '>=', 50, 'realistic number of providers in fixture';
+    ok @ps.head.name.chars > 0, 'first provider has a name';
+};
+
+subtest 'accessors round-trip wire shape' => {
+    plan 4;
+    my $sn = @ps.first(*.name eq 'SambaNova');
+    ok $sn.defined,                                            'SambaNova in fixture';
+    is $sn.slug,         'sambanova',                          'slug';
+    is $sn.privacy-policy-url, 'https://sambanova.ai/privacy-policy', 'privacy-policy-url';
+    ok $sn.headquarters.defined,                               'headquarters defined';
+};
+
+subtest 'datacenters always returns a list' => {
+    plan 2;
+    isa-ok @ps.head.datacenters, List, 'datacenters is a List';
+    my $empty = OpenRouter::API::Result::Provider.new(data => %());
+    is $empty.datacenters.elems, 0, 'missing datacenters → empty list';
+};

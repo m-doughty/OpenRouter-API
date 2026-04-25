@@ -1,0 +1,88 @@
+use Test;
+use lib 'lib', 'xt';
+use LiveKey;
+
+use OpenRouter::API::Client;
+use OpenRouter::API::Result::ActivityRow;
+
+# /activity needs a MANAGEMENT key (not a regular inference key).
+# Credentials come from OPENROUTER_MANAGEMENT_KEY env or a
+# `.openrouter-management-key` file at the module root (env wins).
+# Gated separately from xt/02 so a user with only an inference key
+# doesn't see spurious 401-caused failures.
+
+my $mgmt = resolve-management-key;
+unless $mgmt.chars {
+    plan :skip-all<no management key — set OPENROUTER_MANAGEMENT_KEY or write .openrouter-management-key at the module root>;
+    exit 0;
+}
+
+plan 3;
+
+my $c = OpenRouter::API::Client.new(api-key => $mgmt);
+
+#|( /activity returns rolling 30-UTC-day data. Compute the inclusive
+    window once so date checks have a stable anchor — one day of
+    drift between subtests on a slow run shouldn't cause flakes. )
+my $today    = Date.new(DateTime.now.utc).yyyy-mm-dd;
+my $earliest = Date.new(DateTime.now.utc).earlier(:35days).yyyy-mm-dd;
+
+subtest '/activity — typed rows with sane shape' => {
+    plan 5;
+    my @rows = $c.get-activity;
+    # The endpoint legitimately returns zero rows on a dormant
+    # account; deeper assertions guard with .elems > 0.
+    ok @rows.all ~~ OpenRouter::API::Result::ActivityRow,
+        'every row is a typed ActivityRow';
+
+    if @rows.elems == 0 {
+        skip 'no activity rows', 4;
+        return;
+    }
+
+    my @bad-date = @rows.grep({ !($_.date ~~ /^ \d**4 '-' \d**2 '-' \d**2 $/) });
+    is @bad-date.elems, 0,
+        "every row date is YYYY-MM-DD (offenders: {@bad-date.map(*.date).join(', ')})";
+
+    my @stale = @rows.grep({ $_.date lt $earliest || $_.date gt $today });
+    is @stale.elems, 0,
+        "every row date is within the rolling 30-day window [$earliest..$today]";
+
+    my @bad-model = @rows.grep({ !($_.model ~~ /^ <-[/]>+ '/' <-[/]>+ $/) });
+    is @bad-model.elems, 0,
+        "every row model id matches author/slug shape (offenders: {@bad-model.map(*.model).unique.join(', ')})";
+
+    my @bad-cost = @rows.grep(*.cost < 0);
+    is @bad-cost.elems, 0,
+        "no negative cost rows (offenders: {@bad-cost.elems})";
+};
+
+subtest 'date filter narrows results' => {
+    plan 1;
+    my @all = $c.get-activity;
+    if @all.elems == 0 {
+        skip 'no activity rows — filter test is vacuous', 1;
+        return;
+    }
+    my $date = @all.head.date;
+    my @filtered = $c.get-activity(:$date);
+    ok @filtered.all.date eq $date,
+        ":date filter returns only matching rows";
+};
+
+subtest 'token + cost relationships' => {
+    plan 1;
+    my @rows = $c.get-activity;
+    if @rows.elems == 0 {
+        skip 'no activity rows', 1;
+        return;
+    }
+    # Every row that has any tokens recorded should have a non-zero
+    # request count. The endpoint shouldn't ever produce
+    # tokens-but-zero-requests; if it does, we want to know.
+    my @inconsistent = @rows.grep({
+        ($_.prompt-tokens + $_.completion-tokens) > 0 && $_.requests == 0
+    });
+    is @inconsistent.elems, 0,
+        "no rows with tokens but zero requests (offenders: {@inconsistent.map(*.model).join(', ')})";
+};

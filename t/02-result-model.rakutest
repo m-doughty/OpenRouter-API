@@ -1,0 +1,76 @@
+use Test;
+use lib 'lib';
+
+use OpenRouter::API::Result::Model;
+use JSON::Fast;
+
+# Pins Result::Model parsing against a real OpenRouter /models
+# response (trimmed to 10 representative entries in t/fixtures/).
+# Every accessor + derived helper is exercised — if OR shifts a
+# wire field name, this catches it.
+
+plan 6;
+
+my @raw    = from-json(slurp 't/fixtures/models.json')<data>.list;
+my @models = @raw.map({ OpenRouter::API::Result::Model.new(:data($_)) });
+
+sub by-id(Str $id) { @models.first(*.id eq $id) }
+
+subtest 'basic accessors on a flagship model' => {
+    plan 7;
+    my $m = by-id 'anthropic/claude-opus-4.7';
+    ok $m.defined,                       'claude-opus-4.7 present in fixture';
+    is $m.id,                 'anthropic/claude-opus-4.7', 'id';
+    ok $m.name.chars > 0,                'name populated';
+    ok $m.description.chars > 0,         'description populated';
+    cmp-ok $m.context-length, '>=', 1_000_000, 'context-length >= 1M';
+    ok $m.canonical-slug.chars > 0,      'canonical-slug populated';
+    ok $m.raw ~~ Hash,                   '.raw returns a Hash';
+};
+
+subtest 'modalities' => {
+    plan 4;
+    my $vision = by-id 'anthropic/claude-opus-4.7';
+    ok 'image' (elem) $vision.input-modalities,  'Claude Opus 4.7 accepts images';
+    ok 'text'  (elem) $vision.output-modalities, 'Claude Opus 4.7 emits text';
+
+    my $glm = by-id 'z-ai/glm-5.1';
+    ok 'text'  (elem) $glm.input-modalities,     'GLM 5.1 accepts text';
+    nok 'image' (elem) $glm.input-modalities,    'GLM 5.1 does NOT accept images';
+};
+
+subtest 'capability helpers' => {
+    plan 5;
+    my $m = by-id 'anthropic/claude-opus-4.7';
+    ok $m.supports-reasoning,            'claude-opus-4.7 supports reasoning';
+    isa-ok $m.supports-tool-use,   Bool, 'supports-tool-use is a Bool';
+    isa-ok $m.supports-vision,     Bool, 'supports-vision is a Bool';
+    isa-ok $m.supports-structured-outputs, Bool, 'supports-structured-outputs is a Bool';
+    ok $m.supports-vision,               'claude-opus-4.7 supports vision';
+};
+
+subtest 'price parsing' => {
+    plan 3;
+    my $m = by-id 'anthropic/claude-opus-4.7';
+    isa-ok $m.input-price-per-token,  Rat, 'input price is a Rat';
+    isa-ok $m.output-price-per-token, Rat, 'output price is a Rat';
+    cmp-ok $m.output-price-per-token, '>', $m.input-price-per-token,
+        'completion pricier than prompt (typical)';
+};
+
+subtest 'is-free detection' => {
+    plan 3;
+    my @free    = @models.grep(*.is-free);
+    my @not-free = @models.grep(!*.is-free);
+    cmp-ok @free.elems, '>=', 1, 'at least one free model in fixture';
+    cmp-ok @not-free.elems, '>=', 1, 'at least one paid model in fixture';
+    ok @free.all.id.contains(':free') | @free.all.input-price-per-token == 0,
+        'is-free predicate consistent with suffix / zero-price';
+};
+
+subtest 'supported-parameters roundtrip' => {
+    plan 2;
+    my $m = by-id 'anthropic/claude-opus-4.7';
+    ok $m.supported-parameters.elems > 0, 'supported-parameters non-empty';
+    ok 'max_tokens' (elem) $m.supported-parameters, 'common OAI param listed';
+};

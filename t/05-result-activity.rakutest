@@ -1,0 +1,45 @@
+use Test;
+use lib 'lib';
+
+use OpenRouter::API::Result::ActivityRow;
+use JSON::Fast;
+
+plan 4;
+
+my @raw  = from-json(slurp 't/fixtures/activity.json')<data>.list;
+my @rows = @raw.map({ OpenRouter::API::Result::ActivityRow.new(:data($_)) });
+
+subtest 'fixture parses' => {
+    plan 4;
+    is @rows.elems, 4,                      'four rows in fixture';
+    my $r = @rows.first(*.model eq 'anthropic/claude-opus-4.7');
+    ok $r.defined,                          'opus row found';
+    is $r.date,         '2026-04-22',       'date';
+    is $r.provider-name, 'Anthropic',       'provider-name';
+};
+
+subtest 'token + cost accessors' => {
+    plan 5;
+    my $r = @rows.first(*.model eq 'anthropic/claude-opus-4.7');
+    is $r.requests,           42,       'requests';
+    is $r.prompt-tokens,      125_000,  'prompt-tokens';
+    is $r.completion-tokens,  18_400,   'completion-tokens';
+    is $r.reasoning-tokens,   6_200,    'reasoning-tokens';
+    is-approx $r.cost,        3.8125, 1e-4, 'cost (USD)';
+};
+
+subtest 'cost-per-thousand-tokens helper' => {
+    plan 2;
+    my $r = @rows.first(*.model eq 'anthropic/claude-opus-4.7');
+    my $expected = (3.8125e0 * 1000) / (125_000 + 18_400);
+    is-approx $r.cost-per-thousand-tokens.Num, $expected, 1e-6,
+        'cost-per-thousand matches manual calc';
+    my $zero = OpenRouter::API::Result::ActivityRow.new(data => %( usage => 0 ));
+    is $zero.cost-per-thousand-tokens, 0, 'zero-token row → 0 (no divide-by-zero)';
+};
+
+subtest 'aggregation across days' => {
+    plan 1;
+    my $total = @rows.map(*.cost).sum;
+    is-approx $total, 5.8157, 1e-4, 'total cost across fixture days';
+};

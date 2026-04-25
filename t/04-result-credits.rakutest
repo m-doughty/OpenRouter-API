@@ -1,0 +1,33 @@
+use Test;
+use lib 'lib';
+
+use OpenRouter::API::Result::Credits;
+use JSON::Fast;
+
+plan 3;
+
+my %d = from-json(slurp 't/fixtures/credits.json')<data>;
+my $c = OpenRouter::API::Result::Credits.new(:data(%d));
+
+subtest 'fixture parses' => {
+    plan 3;
+    is $c.total-credits, 100.5,   'total-credits';
+    is $c.total-usage,    25.75,  'total-usage';
+    is $c.remaining,      74.75,  'remaining = total - usage';
+};
+
+subtest 'remaining clamps at zero' => {
+    plan 1;
+    my $broke = OpenRouter::API::Result::Credits.new(
+        data => %( total_credits => 5, total_usage => 10 ),
+    );
+    is $broke.remaining, 0, 'over-spend clamps to zero rather than negative';
+};
+
+subtest 'missing fields default to zero' => {
+    plan 3;
+    my $empty = OpenRouter::API::Result::Credits.new(data => %());
+    is $empty.total-credits, 0,    'missing total-credits → 0';
+    is $empty.total-usage,    0,   'missing total-usage → 0';
+    is $empty.remaining,      0,   'remaining → 0';
+};
