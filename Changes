@@ -2,6 +2,9 @@ Revision history for OpenRouter::API
 
 {{$NEXT}}
 
+0.1.1  2026-04-30T00:12:54+01:00
+    - Bump Github Actions to use node 24+
+
 0.1.0  2026-04-25T02:59:02+01:00
     - Initial release
     - Read-only wrapper over OpenRouter's non-inference REST surface:

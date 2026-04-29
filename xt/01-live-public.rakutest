@@ -107,20 +107,30 @@ subtest '/endpoints/zdr — every endpoint typed + complete' => {
 };
 
 subtest '/models/{author}/{slug}/endpoints — pick a live target + cross-check' => {
-    plan 5;
-    # Target the first non-free, non-router model from the live
-    # catalogue — gives a stable shape that's almost certain to have
-    # at least one serving provider. Picking dynamically rather than
-    # hard-coding a model id, since OR retires models periodically.
-    my $target = @models.first({
-        !$_.is-free && !$_.id.starts-with('openrouter/') && $_.id.split('/').elems == 2
-    });
-    ok $target.defined, 'at least one paid non-router model found';
+    plan 6;
+    # Pin to mistralai/mistral-nemo: open weights (Apache 2.0, released
+    # July 2024 by Mistral + NVIDIA), served on multiple OpenRouter
+    # providers, and as load-bearing as any non-router model on the
+    # platform. Open-weight models are the safest anchor for a live
+    # test — closed-API models (claude-*, gpt-*, gemini-*) get
+    # rotated, deprecated, or have their aliases re-pointed often
+    # enough to break a CI run; the previous dynamic "pick the first
+    # non-free non-router" approach landed on `~anthropic/claude-haiku-latest`,
+    # whose alias was empty for a window in late 2026 and took the
+    # suite down.
+    constant TARGET-ID = 'mistralai/mistral-nemo';
 
-    my ($author, $slug) = $target.id.split('/', 2);
+    my $target = @models.first(*.id eq TARGET-ID);
+    ok $target.defined, "{TARGET-ID} present in /models catalogue";
+    return without $target;
+
+    my ($author, $slug) = TARGET-ID.split('/', 2);
     my @eps = $c.get-model-endpoints($author, $slug);
-    cmp-ok @eps.elems, '>=', 1, "{$target.id} has at least one endpoint";
+    cmp-ok @eps.elems, '>=', 1, "{TARGET-ID} has at least one endpoint";
     isa-ok @eps.head, OpenRouter::API::Result::Endpoint, 'typed entries';
+
+    my @bad-id = @eps.grep({ !($_.model-id.defined && $_.model-id.chars) });
+    is @bad-id.elems, 0, 'every endpoint has a non-empty model-id';
 
     my @bad-prov = @eps.grep({ !($_.provider-name.defined && $_.provider-name.chars) });
     is @bad-prov.elems, 0, 'every endpoint has a non-empty provider-name';
