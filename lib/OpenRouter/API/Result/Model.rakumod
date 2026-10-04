@@ -32,6 +32,8 @@ for anything else. Prices come back as C<Rat> in USD-per-token
 
 =end pod
 
+use OpenRouter::API::Pricing;
+
 unit class OpenRouter::API::Result::Model;
 
 has %!data;
@@ -97,22 +99,43 @@ method supports-vision(--> Bool:D) {
 }
 
 #|( Advertised prompt-token price (USD / token) at the catalogue
-    level. Returns a C<Rat> or Nil if the wire field is absent.
-    The catalogue view exposes a single representative price; see
-    C<get-model-endpoints> to compare provider-level pricing. )
+    level. Returns a C<Rat>, or the undefined C<Rat> if the wire
+    field is absent, unparseable, or carries OpenRouter's C<-1>
+    "variable pricing" sentinel (router models such as
+    C<openrouter/auto>, whose real cost depends on which underlying
+    model a request gets routed to — see C<has-variable-pricing>).
+    Cost math must check C<.defined> rather than treat the sentinel
+    as a real (negative) price. The catalogue view exposes a single
+    representative price; see C<get-model-endpoints> to compare
+    provider-level pricing. )
 method input-price-per-token(--> Rat) {
-	self!parse-price(%!data<pricing><prompt>);
+	parse-price(%!data<pricing><prompt>);
 }
 
+#|( Advertised completion-token price (USD / token). Same undefined-
+    on-absent/unparseable/sentinel rule as C<input-price-per-token>. )
 method output-price-per-token(--> Rat) {
-	self!parse-price(%!data<pricing><completion>);
+	parse-price(%!data<pricing><completion>);
+}
+
+#|( True iff either pricing field carries OpenRouter's C<-1>
+    "variable pricing" sentinel — i.e. this is a router model whose
+    real price depends on which underlying model a request gets
+    routed to, not a model with a genuinely missing or malformed
+    price. When True, C<input-price-per-token> and
+    C<output-price-per-token> are both undefined. )
+method has-variable-pricing(--> Bool:D) {
+	so (is-price-sentinel(%!data<pricing><prompt>)
+		|| is-price-sentinel(%!data<pricing><completion>));
 }
 
 #|( Is the model tagged as free to call? OR marks free-tier variants
     with C<:free> suffixes, or sets both pricing fields to the
-    string C<"0">. Normalises both. )
+    string C<"0">. Normalises both. A variable-priced router is never
+    free, even though its prices are undefined. )
 method is-free(--> Bool:D) {
 	return True if self.id.contains(':free');
+	return False if self.has-variable-pricing;
 	my $p = self.input-price-per-token;
 	my $c = self.output-price-per-token;
 	$p.defined && $p == 0 && $c.defined && $c == 0;
@@ -121,10 +144,3 @@ method is-free(--> Bool:D) {
 #|( Verbatim response hash. Escape hatch for fields the wrapper
     doesn't expose as named accessors. )
 method raw(--> Hash) { %!data.Hash }
-
-method !parse-price($v --> Rat) {
-	return Rat unless $v.defined;
-	# OR sends prices as strings — parse defensively; a malformed
-	# value returns Nil rather than throwing.
-	return try { $v.Rat } // Rat;
-}

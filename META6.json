@@ -7,7 +7,7 @@
   ],
   "depends": [
     "Cro::HTTP:ver<0.8.11>:auth<zef:cro>",
-    "JSON::Fast:ver<0.19>:auth<cpan:TIMOTIMO>"
+    "JSON::Fast:ver<0.21.0+>:auth<zef:timo>"
   ],
   "description": "Raku client for OpenRouter's non-inference REST API",
   "license": "Artistic-2.0",
@@ -17,6 +17,7 @@
     "OpenRouter::API": "lib/OpenRouter/API.rakumod",
     "OpenRouter::API::Client": "lib/OpenRouter/API/Client.rakumod",
     "OpenRouter::API::Filter": "lib/OpenRouter/API/Filter.rakumod",
+    "OpenRouter::API::Pricing": "lib/OpenRouter/API/Pricing.rakumod",
     "OpenRouter::API::Result::ActivityRow": "lib/OpenRouter/API/Result/ActivityRow.rakumod",
     "OpenRouter::API::Result::Credits": "lib/OpenRouter/API/Result/Credits.rakumod",
     "OpenRouter::API::Result::Endpoint": "lib/OpenRouter/API/Result/Endpoint.rakumod",
@@ -34,5 +35,5 @@
   ],
   "test-depends": [
   ],
-  "version": "0.1.1"
+  "version": "0.2.0"
 }

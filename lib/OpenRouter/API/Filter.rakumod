@@ -55,11 +55,14 @@ use OpenRouter::API::Result::Model;
           C<anthropic/*> model.
     =item C<:$max-input-cost> / C<:$max-output-cost> — USD per token
           at the catalogue-level advertised price. A model with
-          either price undefined (rare, but happens for free /
-          preview models) counts as matching when the limit is
-          zero and excluded otherwise, since "unknown price" is
-          safer to omit than to silently include when the caller
-          set a ceiling.
+          either price undefined is always excluded once a cost
+          filter is set, since "unknown price" is never safe to
+          show as within budget. This includes variable-priced
+          router models (C<has-variable-pricing> true — e.g.
+          C<openrouter/auto>), whose real price depends on which
+          underlying model a request gets routed to and so can't be
+          bounded client-side, as well as any model with a
+          genuinely missing or malformed price.
     =item C<:$min-context-length> — C<context-length >= N>.
     =item C<:$supports-*> — strict Boolean compare against the
           derived capability check. C<:supports-tool-use(True)>

@@ -9,12 +9,22 @@ use JSON::Fast;
 # Every accessor + derived helper is exercised — if OR shifts a
 # wire field name, this catches it.
 
-plan 6;
+plan 7;
 
 my @raw    = from-json(slurp 't/fixtures/models.json')<data>.list;
 my @models = @raw.map({ OpenRouter::API::Result::Model.new(:data($_)) });
 
 sub by-id(Str $id) { @models.first(*.id eq $id) }
+
+# Builds a minimal Model around a synthetic pricing hash — the real
+# /models fixture only has "0" and ordinary decimal-string prices, so
+# the -1 sentinel / malformed-negative / absent cases below need
+# hand-built fixtures rather than catalogue entries.
+sub model-with-pricing(%pricing, Str :$id = 'test/sentinel-fixture' --> OpenRouter::API::Result::Model:D) {
+    my %data = :$id, :name('Sentinel Fixture');
+    %data<pricing> = %pricing if %pricing;
+    OpenRouter::API::Result::Model.new(:%data);
+}
 
 subtest 'basic accessors on a flagship model' => {
     plan 7;
@@ -73,4 +83,68 @@ subtest 'supported-parameters roundtrip' => {
     my $m = by-id 'anthropic/claude-opus-4.7';
     ok $m.supported-parameters.elems > 0, 'supported-parameters non-empty';
     ok 'max_tokens' (elem) $m.supported-parameters, 'common OAI param listed';
+};
+
+subtest '-1 sentinel: variable pricing vs malformed negatives' => {
+    plan 33;
+
+    # Both fields sentinel.
+    my $both = model-with-pricing(%(:prompt('-1'), :completion('-1')));
+    nok $both.input-price-per-token.defined,  'both "-1": input price undefined';
+    nok $both.output-price-per-token.defined, 'both "-1": output price undefined';
+    ok $both.has-variable-pricing,            'both "-1": has-variable-pricing True';
+    nok $both.is-free,                        'both "-1": is-free False';
+
+    # Sentinel in only one field.
+    my $one = model-with-pricing(%(:prompt('-1'), :completion('0.000015')));
+    nok $one.input-price-per-token.defined,   'prompt "-1" only: input undefined';
+    ok $one.output-price-per-token.defined,   'prompt "-1" only: output still parses';
+    is $one.output-price-per-token, 0.000015, 'prompt "-1" only: output value correct';
+    ok $one.has-variable-pricing,             'prompt "-1" only: has-variable-pricing True';
+    nok $one.is-free,                         'prompt "-1" only: is-free False';
+
+    # "-1.0" decimal-string form of the sentinel.
+    my $dec = model-with-pricing(%(:prompt('-1.0'), :completion('-1.0')));
+    nok $dec.input-price-per-token.defined,   '"-1.0": input price undefined';
+    nok $dec.output-price-per-token.defined,  '"-1.0": output price undefined';
+    ok $dec.has-variable-pricing,             '"-1.0": has-variable-pricing True';
+
+    # Bare numeric -1 (not a string).
+    my $num = model-with-pricing(%(:prompt(-1), :completion(-1)));
+    nok $num.input-price-per-token.defined,   'numeric -1: input price undefined';
+    nok $num.output-price-per-token.defined,  'numeric -1: output price undefined';
+    ok $num.has-variable-pricing,             'numeric -1: has-variable-pricing True';
+
+    # "0"/"0" — genuinely free, not variable.
+    my $zero = model-with-pricing(%(:prompt('0'), :completion('0')));
+    is $zero.input-price-per-token,  0,       '"0"/"0": input price is 0';
+    is $zero.output-price-per-token, 0,       '"0"/"0": output price is 0';
+    nok $zero.has-variable-pricing,           '"0"/"0": has-variable-pricing False';
+    ok $zero.is-free,                         '"0"/"0": is-free True';
+
+    # Ordinary price.
+    my $normal = model-with-pricing(%(:prompt('0.000005'), :completion('0.000015')));
+    is $normal.input-price-per-token,  0.000005,  'normal price: input value correct';
+    is $normal.output-price-per-token, 0.000015,  'normal price: output value correct';
+    nok $normal.has-variable-pricing,             'normal price: has-variable-pricing False';
+    nok $normal.is-free,                          'normal price: is-free False';
+
+    # "-0.5" — malformed negative, NOT the sentinel.
+    my $neg = model-with-pricing(%(:prompt('-0.5'), :completion('-0.5')));
+    nok $neg.input-price-per-token.defined,   'malformed "-0.5": input price undefined';
+    nok $neg.output-price-per-token.defined,  'malformed "-0.5": output price undefined';
+    nok $neg.has-variable-pricing,            'malformed "-0.5": has-variable-pricing False';
+    nok $neg.is-free,                         'malformed "-0.5": is-free False';
+
+    # Garbage string.
+    my $garbage = model-with-pricing(%(:prompt('not-a-number'), :completion('also-bad')));
+    nok $garbage.input-price-per-token.defined,  'garbage string: input price undefined';
+    nok $garbage.has-variable-pricing,           'garbage string: has-variable-pricing False';
+
+    # Absent pricing hash entirely.
+    my $absent = model-with-pricing({});
+    nok $absent.input-price-per-token.defined,   'absent pricing: input price undefined';
+    nok $absent.output-price-per-token.defined,  'absent pricing: output price undefined';
+    nok $absent.has-variable-pricing,            'absent pricing: has-variable-pricing False';
+    nok $absent.is-free,                         'absent pricing: is-free False';
 };

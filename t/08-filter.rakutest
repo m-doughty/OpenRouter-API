@@ -9,7 +9,7 @@ use JSON::Fast;
 # exposes. Uses the trimmed real-OR fixture so behaviour is grounded
 # in actual model shapes, not synthetic ones.
 
-plan 9;
+plan 10;
 
 my @models = from-json(slurp 't/fixtures/models.json')<data>.map({
     OpenRouter::API::Result::Model.new(:data($_));
@@ -84,4 +84,36 @@ subtest 'no-match returns empty list, never dies' => {
     my @miss = filtered(:keyword<nonexistent-zzzzz-keyword>);
     is @miss.elems, 0, 'no-match → empty list';
     isa-ok @miss, List, 'still a List, not Nil';
+};
+
+subtest 'cost filters exclude variable-priced routers' => {
+    plan 5;
+
+    # Fixture has no router entry — synthesise one with the -1
+    # sentinel on both fields, alongside a free and a cheap real
+    # model, to pin the composed behaviour.
+    my $router = OpenRouter::API::Result::Model.new(:data(%(
+        :id('openrouter/auto'), :name('Auto Router'),
+        :pricing(%(:prompt('-1'), :completion('-1'))),
+    )));
+    my $free = @models.first(*.is-free);
+    my $cheap = @models.first({ !.is-free && .input-price-per-token.defined });
+    my @pool = ($router, $free, $cheap);
+
+    my @no-filter = @pool.grep({ OpenRouter::API::Filter::matches($_) });
+    is @no-filter.elems, 3,
+        'no cost filter given: router, free, and cheap models all kept';
+
+    my @zero-cap = @pool.grep({
+        OpenRouter::API::Filter::matches($_, :max-input-cost(0.0e0.Rat))
+    });
+    nok $router (elem) @zero-cap, ':max-input-cost(0): router excluded';
+    ok $free (elem) @zero-cap,    ':max-input-cost(0): free model kept';
+    nok $cheap (elem) @zero-cap,  ':max-input-cost(0): cheap (non-free) model excluded';
+
+    my @output-cap = @pool.grep({
+        OpenRouter::API::Filter::matches($_, :max-output-cost($cheap.output-price-per-token))
+    });
+    nok $router (elem) @output-cap,
+        ':max-output-cost(cheap price): router excluded despite any numeric cap';
 };

@@ -8,7 +8,7 @@ use JSON::Fast;
 # /models/{author}/{slug}/endpoints (under data.endpoints) and
 # /endpoints/zdr (under data directly).
 
-plan 4;
+plan 5;
 
 my %model-endpoints = from-json(slurp 't/fixtures/model-endpoints.json')<data>;
 my @endpoints = %model-endpoints<endpoints>.map({
@@ -57,4 +57,39 @@ subtest 'zdr: emitted via the same class' => {
     my $z = @zdr.head;
     ok $z.provider-name.chars > 0,        'zdr endpoint has provider-name';
     ok $z.context-length > 0,             'zdr endpoint has context-length';
+};
+
+subtest '-1 sentinel: variable pricing vs malformed negatives' => {
+    plan 10;
+
+    sub endpoint-with-pricing(%pricing --> OpenRouter::API::Result::Endpoint:D) {
+        my %data = :name('sentinel-fixture'), :provider_name('Sentinel Provider');
+        %data<pricing> = %pricing if %pricing;
+        OpenRouter::API::Result::Endpoint.new(:%data);
+    }
+
+    # Sentinel on every price field, including cache read/write.
+    my $both = endpoint-with-pricing(%(
+        :prompt('-1'), :completion('-1'),
+        :input_cache_read('-1'), :input_cache_write('-1'),
+    ));
+    nok $both.input-price-per-token.defined,             '"-1": input price undefined';
+    nok $both.output-price-per-token.defined,            '"-1": output price undefined';
+    nok $both.input-cache-read-price-per-token.defined,  '"-1": cache-read price undefined';
+    nok $both.input-cache-write-price-per-token.defined, '"-1": cache-write price undefined';
+
+    # "0"/"0" — genuinely free, not the sentinel.
+    my $zero = endpoint-with-pricing(%(:prompt('0'), :completion('0')));
+    is $zero.input-price-per-token,  0,  '"0"/"0": input price is 0';
+    is $zero.output-price-per-token, 0,  '"0"/"0": output price is 0';
+
+    # "-0.5" — malformed negative, not the sentinel; still undefined.
+    my $neg = endpoint-with-pricing(%(:prompt('-0.5'), :completion('-0.5')));
+    nok $neg.input-price-per-token.defined,  'malformed "-0.5": input price undefined';
+    nok $neg.output-price-per-token.defined, 'malformed "-0.5": output price undefined';
+
+    # Absent pricing hash entirely.
+    my $absent = endpoint-with-pricing({});
+    nok $absent.input-price-per-token.defined,  'absent pricing: input price undefined';
+    nok $absent.output-price-per-token.defined, 'absent pricing: output price undefined';
 };

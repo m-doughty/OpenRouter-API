@@ -2,6 +2,24 @@ Revision history for OpenRouter::API
 
 {{$NEXT}}
 
+0.2.0  2026-10-04T22:33:41+01:00
+
+    - OpenRouter's -1 "variable pricing" sentinel (sent for router
+      models whose real cost depends on which underlying model a
+      request gets routed to) is no longer reported as a literal -1
+      price. Result::Model and Result::Endpoint now return an
+      undefined price for both the sentinel and any other malformed
+      negative value; Result::Model gains has-variable-pricing to
+      tell the two apart. This is a behaviour change: callers that
+      previously read a -1 price directly will see Nil instead, and
+      Filter's max-input-cost / max-output-cost now correctly exclude
+      router models from cost-bounded searches instead of letting
+      them through as free.
+    - Requires JSON::Fast 0.21.0 or later (zef:timo). 0.19 (cpan:TIMOTIMO)
+      fails its own tests under the RakuAST compiler frontend that Rakudo
+      2026.09 makes the default, so installing this distribution stopped
+      at that dependency.
+
 0.1.1  2026-04-30T00:12:54+01:00
     - Bump Github Actions to use node 24+
 

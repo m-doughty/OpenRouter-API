@@ -27,6 +27,8 @@ format is a string).
 
 =end pod
 
+use OpenRouter::API::Pricing;
+
 unit class OpenRouter::API::Result::Endpoint;
 
 has %!data;
@@ -51,20 +53,35 @@ method supported-parameters(--> List) {
 	(%!data<supported_parameters> // []).List;
 }
 
+#|( Per-provider prompt-token price (USD / token). Returns a C<Rat>,
+    or the undefined C<Rat> if the wire field is absent, unparseable,
+    or carries OpenRouter's C<-1> "variable pricing" sentinel (see
+    C<OpenRouter::API::Result::Model::has-variable-pricing> for the
+    router-model case this covers). Cost math must check C<.defined>
+    rather than treat the sentinel as a real (negative) price. )
 method input-price-per-token(--> Rat) {
-	self!parse-price(%!data<pricing><prompt>);
+	parse-price(%!data<pricing><prompt>);
 }
 
+#|( Per-provider completion-token price (USD / token). Same
+    undefined-on-absent/unparseable/sentinel rule as
+    C<input-price-per-token>. )
 method output-price-per-token(--> Rat) {
-	self!parse-price(%!data<pricing><completion>);
+	parse-price(%!data<pricing><completion>);
 }
 
+#|( Cache-read discount price (USD / token), where the provider
+    supports prompt caching. Same undefined-on-absent/unparseable/
+    sentinel rule as C<input-price-per-token>. )
 method input-cache-read-price-per-token(--> Rat) {
-	self!parse-price(%!data<pricing><input_cache_read>);
+	parse-price(%!data<pricing><input_cache_read>);
 }
 
+#|( Cache-write price (USD / token), where the provider supports
+    prompt caching. Same undefined-on-absent/unparseable/sentinel
+    rule as C<input-price-per-token>. )
 method input-cache-write-price-per-token(--> Rat) {
-	self!parse-price(%!data<pricing><input_cache_write>);
+	parse-price(%!data<pricing><input_cache_write>);
 }
 
 #|( Numeric OpenRouter health status. Wire meaning: 0 = healthy,
@@ -89,8 +106,3 @@ method supports-implicit-caching(--> Bool:D) {
 }
 
 method raw(--> Hash) { %!data.Hash }
-
-method !parse-price($v --> Rat) {
-	return Rat unless $v.defined;
-	return try { $v.Rat } // Rat;
-}

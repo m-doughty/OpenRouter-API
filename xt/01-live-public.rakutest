@@ -20,19 +20,27 @@ my $c = OpenRouter::API::Client.new;
 my @models    = $c.get-models;
 my @providers = $c.get-providers;
 
-#|( OR uses C<-1> as a sentinel for "indeterminate price" on its
-    routing models (openrouter/auto, openrouter/bodybuilder,
-    openrouter/pareto-code) — the actual price depends on which
-    underlying model gets routed to. Treated as legitimate, not as
-    a parser bug. )
-sub price-ok($m, $p --> Bool) {
-    return True unless $p.defined;
-    return True if $p >= 0;
-    return $m.id.starts-with('openrouter/');   # router-model sentinel
-}
-
+#|( OR uses C<-1> as a sentinel for "indeterminate price" on router
+    models (openrouter/auto, openrouter/bodybuilder,
+    openrouter/pareto-code, and third-party routers like
+    typesafe/jev-router, nvidia/switchyard) — the actual price
+    depends on which underlying model gets routed to. Parsing it is
+    Result::Model's job: C<input-price-per-token> /
+    C<output-price-per-token> report the sentinel as an undefined
+    price (never as a literal -1), and C<has-variable-pricing> is
+    True for exactly these models. The invariants below are
+    author-agnostic on purpose — new routers can appear under any
+    author at any time, so this must not hard-code an id allowlist.
+    What it does pin: (a) no model ever surfaces a DEFINED negative
+    price — that would mean the sentinel leaked through unparsed;
+    (b) every model with an undefined input price is accounted for
+    by C<has-variable-pricing> — so a genuinely missing/unparseable
+    price (a real parser or wire-format regression) still fails;
+    (c) at least one known router (openrouter/auto) is present and
+    flagged, as a sanity check that the sentinel path is actually
+    exercised by live data. )
 subtest '/models — catalogue invariants' => {
-    plan 8;
+    plan 9;
     cmp-ok @models.elems, '>', 50,                  'realistic model count';
     isa-ok @models.head, OpenRouter::API::Result::Model, 'typed entries';
 
@@ -42,15 +50,22 @@ subtest '/models — catalogue invariants' => {
     my @bad-ctx = @models.grep(*.context-length <= 0);
     is @bad-ctx.elems, 0, "every model has positive context-length (offenders: {@bad-ctx.map(*.id).join(', ')})";
 
-    my @missing-price = @models.grep({ !$_.input-price-per-token.defined });
-    is @missing-price.elems, 0,
-        "every model has a parsed input-price (offenders: {@missing-price.map(*.id).join(', ')})";
-
-    my @bad-price = @models.grep({
-        !price-ok($_, $_.input-price-per-token) || !price-ok($_, $_.output-price-per-token)
+    my @defined-negative = @models.grep({
+        ($_.input-price-per-token.defined && $_.input-price-per-token < 0)
+        || ($_.output-price-per-token.defined && $_.output-price-per-token < 0)
     });
-    is @bad-price.elems, 0,
-        "no negative prices outside the openrouter/* router family (offenders: {@bad-price.map(*.id).join(', ')})";
+    is @defined-negative.elems, 0,
+        "no model has a DEFINED negative price (offenders: {@defined-negative.map(*.id).join(', ')})";
+
+    my @unaccounted-missing = @models.grep({
+        !$_.input-price-per-token.defined && !$_.has-variable-pricing
+    });
+    is @unaccounted-missing.elems, 0,
+        "every undefined input-price is a flagged variable-pricing router (offenders: {@unaccounted-missing.map(*.id).join(', ')})";
+
+    my @routers = @models.grep(*.has-variable-pricing);
+    cmp-ok @routers.elems, '>=', 1,
+        "at least one router model flagged has-variable-pricing (e.g. openrouter/auto)";
 
     my %known-modalities = <audio file image text video>.Set;
     my @unknown = @models.map(*.input-modalities.Slip).unique.grep({ ! %known-modalities{$_} });
